@@ -1,12 +1,14 @@
 import os
 import sys
-sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
+
+# Add the project root to Python path
+project_root = os.path.dirname(os.path.abspath(__file__))
+sys.path.insert(0, project_root)
 
 from flask import Flask, send_from_directory, jsonify, request
 from flask_cors import CORS
 from flask_socketio import SocketIO, emit
-from src.models.user import db
-from src.routes.user import user_bp
+from flask_sqlalchemy import SQLAlchemy
 import threading
 import time
 import random
@@ -22,13 +24,27 @@ CORS(app, origins="*")
 # Initialize SocketIO
 socketio = SocketIO(app, cors_allowed_origins="*", async_mode='threading')
 
-# Register blueprints
-app.register_blueprint(user_bp, url_prefix='/api')
-
 # Database configuration
 app.config['SQLALCHEMY_DATABASE_URI'] = f"sqlite:///{os.path.join(os.path.dirname(__file__), 'database', 'app.db')}"
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
-db.init_app(app)
+
+# Initialize database
+db = SQLAlchemy(app)
+
+# Import models and routes after app initialization
+try:
+    from src.models.user import User, Watchlist, Alert
+    from src.routes.user import user_bp
+    
+    # Register blueprints
+    app.register_blueprint(user_bp, url_prefix='/api')
+except ImportError as e:
+    print(f"Warning: Could not import user modules: {e}")
+    print("Running without user authentication features")
+    
+    # Create a dummy blueprint to prevent errors
+    from flask import Blueprint
+    user_bp = Blueprint('user_dummy', __name__)
 
 # Global variables for real-time data
 current_rates = {
@@ -355,7 +371,17 @@ def get_model_performance():
 def serve(path):
     static_folder_path = app.static_folder
     if static_folder_path is None:
-        return "Static folder not configured", 404
+        return jsonify({
+            'message': 'Exchange Rate Forecasting API',
+            'version': '1.0.0',
+            'endpoints': {
+                'health': '/api/health',
+                'rates': '/api/rates',
+                'forecast': '/api/forecast',
+                'news': '/api/news/<pair>',
+                'models': '/api/models/performance'
+            }
+        })
 
     if path != "" and os.path.exists(os.path.join(static_folder_path, path)):
         return send_from_directory(static_folder_path, path)
@@ -376,9 +402,13 @@ def serve(path):
                 }
             })
 
+# Initialize database tables
 with app.app_context():
-    db.create_all()
+    try:
+        db.create_all()
+        print("Database tables created successfully")
+    except Exception as e:
+        print(f"Warning: Could not create database tables: {e}")
 
 if __name__ == '__main__':
     socketio.run(app, host='0.0.0.0', port=5000, debug=True)
-
