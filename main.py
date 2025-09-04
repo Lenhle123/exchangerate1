@@ -24,8 +24,20 @@ CORS(app, origins="*")
 # Initialize SocketIO
 socketio = SocketIO(app, cors_allowed_origins="*", async_mode='threading')
 
-# Database configuration
-app.config['SQLALCHEMY_DATABASE_URI'] = f"sqlite:///{os.path.join(os.path.dirname(__file__), 'database', 'app.db')}"
+# ==============================
+# Database configuration (UPDATED)
+# ==============================
+DATABASE_URL = os.getenv("DATABASE_URL")  # Render will inject this
+
+if DATABASE_URL:
+    # Render sometimes gives 'postgres://' instead of 'postgresql://'
+    if DATABASE_URL.startswith("postgres://"):
+        DATABASE_URL = DATABASE_URL.replace("postgres://", "postgresql://", 1)
+    app.config['SQLALCHEMY_DATABASE_URI'] = DATABASE_URL
+else:
+    # Local fallback to SQLite
+    app.config['SQLALCHEMY_DATABASE_URI'] = f"sqlite:///{os.path.join(os.path.dirname(__file__), 'database', 'app.db')}"
+
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
 
 # Initialize database
@@ -195,7 +207,6 @@ def get_historical_data(pair):
     history = []
     for i in range(intervals):
         timestamp = datetime.utcnow() - timedelta(minutes=i * delta_minutes)
-        # Add some realistic variation
         variation = random.uniform(-0.02, 0.02)
         rate = base_rate + variation
         
@@ -209,7 +220,6 @@ def get_historical_data(pair):
             'close': round(rate, 4)
         })
     
-    # Reverse to get chronological order
     history.reverse()
     
     # Calculate statistics
@@ -242,7 +252,6 @@ def generate_forecast():
     predictions = []
     
     for i in range(1, min(horizon + 1, 25)):  # Limit to 24 hours
-        # Simulate prediction with some trend and noise
         trend = random.uniform(-0.001, 0.001) * i
         noise = random.uniform(-0.002, 0.002)
         predicted_rate = current_rate + trend + noise
@@ -402,13 +411,15 @@ def serve(path):
                 }
             })
 
+# ==============================
 # Initialize database tables
+# ==============================
 with app.app_context():
     try:
         db.create_all()
-        print("Database tables created successfully")
+        print("✅ Database tables created or already exist")
     except Exception as e:
-        print(f"Warning: Could not create database tables: {e}")
+        print(f"⚠️ Warning: Could not create database tables: {e}")
 
 if __name__ == '__main__':
     socketio.run(app, host='0.0.0.0', port=5000, debug=True)
