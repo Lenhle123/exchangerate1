@@ -25,12 +25,12 @@ CORS(app, origins="*")
 socketio = SocketIO(app, cors_allowed_origins="*", async_mode='threading')
 
 # -----------------------------
-# Database configuration
+# Database configuration (Step 3 applied)
 # -----------------------------
 DATABASE_URL = os.getenv("DATABASE_URL")
 
 if DATABASE_URL:
-    # Fix for SQLAlchemy + Render Postgres URL
+    # ✅ Fix for Render’s Postgres URL
     if DATABASE_URL.startswith("postgres://"):
         DATABASE_URL = DATABASE_URL.replace("postgres://", "postgresql://", 1)
     app.config["SQLALCHEMY_DATABASE_URI"] = DATABASE_URL
@@ -165,8 +165,6 @@ def get_rate(pair):
         })
     else:
         return jsonify({'error': 'Currency pair not found'}), 404
-
-# ... [keep all other routes unchanged] ...
 
 # -----------------------------
 # Serve React frontend
