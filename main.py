@@ -9,6 +9,7 @@ from flask import Flask, send_from_directory, jsonify, request
 from flask_cors import CORS
 from flask_socketio import SocketIO, emit
 from flask_sqlalchemy import SQLAlchemy
+from sqlalchemy import text  # ✅ Added for proper SQL text handling
 import threading
 import time
 import random
@@ -152,11 +153,11 @@ def handle_subscribe(data):
 # -----------------------------
 @app.route('/api/health')
 def health_check():
-    # ✅ ADDED: Check database connection status
+    # ✅ FIXED: Proper SQLAlchemy text handling
     db_status = 'connected'
     try:
-        # Test database connection
-        db.session.execute('SELECT 1')
+        # Test database connection with proper text() wrapper
+        db.session.execute(text('SELECT 1'))
         db.session.commit()
     except Exception as e:
         db_status = f'error: {str(e)[:50]}'
@@ -254,8 +255,8 @@ def init_database():
             db.create_all()
             print("✅ Database tables created successfully")
             
-            # Test the connection
-            db.session.execute('SELECT 1')
+            # Test the connection with proper text() wrapper
+            db.session.execute(text('SELECT 1'))
             db.session.commit()
             print("✅ Database connection verified")
             
