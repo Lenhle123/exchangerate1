@@ -25,34 +25,62 @@ CORS(app, origins="*")
 socketio = SocketIO(app, cors_allowed_origins="*", async_mode='threading')
 
 # -----------------------------
-# Database configuration (Step 3 applied)
+# Database configuration (FIXED)
 # -----------------------------
 DATABASE_URL = os.getenv("DATABASE_URL")
 
 if DATABASE_URL:
-    # ✅ Fix for Render’s Postgres URL
+    # ✅ Fix for Render's Postgres URL
     if DATABASE_URL.startswith("postgres://"):
         DATABASE_URL = DATABASE_URL.replace("postgres://", "postgresql://", 1)
     app.config["SQLALCHEMY_DATABASE_URI"] = DATABASE_URL
+    print(f"Using PostgreSQL database")
 else:
-    # fallback to SQLite (local development)
-    app.config['SQLALCHEMY_DATABASE_URI'] = f"sqlite:///{os.path.join(os.path.dirname(__file__), 'database', 'app.db')}"
+    # ✅ FIXED: Use writable directory for SQLite on cloud platforms
+    if os.environ.get('RENDER') or os.environ.get('RAILWAY') or os.environ.get('HEROKU'):
+        # Use temporary directory on cloud platforms
+        import tempfile
+        db_path = os.path.join(tempfile.gettempdir(), 'app.db')
+        app.config['SQLALCHEMY_DATABASE_URI'] = f"sqlite:///{db_path}"
+        print(f"Using SQLite in temp directory: {db_path}")
+    else:
+        # Local development - ensure directory exists
+        db_dir = os.path.join(os.path.dirname(__file__), 'database')
+        os.makedirs(db_dir, exist_ok=True)
+        db_path = os.path.join(db_dir, 'app.db')
+        app.config['SQLALCHEMY_DATABASE_URI'] = f"sqlite:///{db_path}"
+        print(f"Using SQLite locally: {db_path}")
 
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
 
 # Initialize database
 db = SQLAlchemy(app)
 
-# Import models and routes after app initialization
+# ✅ FIXED: Better error handling for model imports
 try:
     from src.models.user import User, Watchlist, Alert
     from src.routes.user import user_bp
     
     # Register blueprints
     app.register_blueprint(user_bp, url_prefix='/api')
+    print("User authentication modules loaded successfully")
 except ImportError as e:
     print(f"Warning: Could not import user modules: {e}")
     print("Running without user authentication features")
+    
+    # Create dummy models to prevent errors
+    class User(db.Model):
+        id = db.Column(db.Integer, primary_key=True)
+        username = db.Column(db.String(80), unique=True, nullable=False)
+        
+    class Watchlist(db.Model):
+        id = db.Column(db.Integer, primary_key=True)
+        pair = db.Column(db.String(10), nullable=False)
+        
+    class Alert(db.Model):
+        id = db.Column(db.Integer, primary_key=True)
+        pair = db.Column(db.String(10), nullable=False)
+        target_rate = db.Column(db.Float, nullable=False)
     
     # Create a dummy blueprint to prevent errors
     from flask import Blueprint
@@ -124,13 +152,23 @@ def handle_subscribe(data):
 # -----------------------------
 @app.route('/api/health')
 def health_check():
+    # ✅ ADDED: Check database connection status
+    db_status = 'connected'
+    try:
+        # Test database connection
+        db.session.execute('SELECT 1')
+        db.session.commit()
+    except Exception as e:
+        db_status = f'error: {str(e)[:50]}'
+        print(f"Database health check failed: {e}")
+    
     return jsonify({
         'status': 'healthy',
         'timestamp': datetime.utcnow().isoformat(),
         'services': {
             'api': 'running',
             'websocket': 'running',
-            'database': 'connected'
+            'database': db_status
         }
     })
 
@@ -206,14 +244,29 @@ def serve(path):
             })
 
 # -----------------------------
-# Initialize database tables
+# ✅ FIXED: Initialize database tables with better error handling
 # -----------------------------
-with app.app_context():
-    try:
-        db.create_all()
-        print("Database tables created successfully")
-    except Exception as e:
-        print(f"Warning: Could not create database tables: {e}")
+def init_database():
+    """Initialize database tables with proper error handling"""
+    with app.app_context():
+        try:
+            # Create all tables
+            db.create_all()
+            print("✅ Database tables created successfully")
+            
+            # Test the connection
+            db.session.execute('SELECT 1')
+            db.session.commit()
+            print("✅ Database connection verified")
+            
+            return True
+        except Exception as e:
+            print(f"❌ Database initialization failed: {e}")
+            print("⚠️  App will continue running but database features may not work")
+            return False
+
+# Initialize database on startup
+init_database()
 
 if __name__ == '__main__':
     socketio.run(app, host='0.0.0.0', port=5000, debug=True)
