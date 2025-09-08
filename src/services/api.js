@@ -240,4 +240,78 @@ class APIService {
           direction: Math.random() > 0.5 ? 'up' : 'down'
         },
         '168h': {
-          rate: currentRate + (Math.random() - 0.5)
+          rate: currentRate + (Math.random() - 0.5) * 0.03,
+          confidence: 0.65,
+          direction: Math.random() > 0.5 ? 'up' : 'down'
+        }
+      },
+      generated_at: new Date().toISOString()
+    };
+  }
+
+  getMockNews(pair) {
+    const mockNews = [
+      {
+        id: 1,
+        title: "Federal Reserve Signals Potential Rate Changes",
+        description: "The Federal Reserve indicated potential monetary policy adjustments that could significantly impact currency markets in the coming months.",
+        source: "Reuters",
+        published_at: new Date(Date.now() - 2 * 3600000).toISOString(),
+        sentiment: { score: 0.3, label: 'positive', confidence: 0.85 },
+        relevance: 0.9,
+        impact: 'high'
+      },
+      {
+        id: 2,
+        title: "European Central Bank Maintains Current Policy",
+        description: "The ECB decided to keep interest rates unchanged while monitoring inflation trends across the eurozone.",
+        source: "Bloomberg",
+        published_at: new Date(Date.now() - 4 * 3600000).toISOString(),
+        sentiment: { score: -0.1, label: 'neutral', confidence: 0.75 },
+        relevance: 0.7,
+        impact: 'medium'
+      },
+      {
+        id: 3,
+        title: "USD Strengthens on Economic Data",
+        description: "Recent economic indicators show stronger than expected performance, boosting USD confidence.",
+        source: "Financial Times",
+        published_at: new Date(Date.now() - 6 * 3600000).toISOString(),
+        sentiment: { score: 0.6, label: 'positive', confidence: 0.9 },
+        relevance: 0.8,
+        impact: 'high'
+      }
+    ];
+
+    return {
+      pair,
+      articles: mockNews,
+      total_count: mockNews.length,
+      sentiment_summary: {
+        overall_sentiment: 0.27,
+        positive_count: 2,
+        neutral_count: 1,
+        negative_count: 0
+      }
+    };
+  }
+
+  getMockSentiment(pair) {
+    return {
+      pair,
+      period: '24h',
+      overall_sentiment: 0.35,
+      sentiment_trend: 'improving',
+      distribution: {
+        positive: 0.45,
+        neutral: 0.32,
+        negative: 0.23
+      },
+      confidence: 0.82,
+      article_count: 25,
+      last_updated: new Date().toISOString()
+    };
+  }
+}
+
+export default new APIService();
