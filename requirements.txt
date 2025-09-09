@@ -1,40 +1,16 @@
-# FastAPI and server
+# Minimal FastAPI setup - Python 3.13 compatible
 fastapi==0.104.1
 uvicorn[standard]==0.24.0
 
-# Database
-motor==3.3.2
-pymongo==4.6.0
-
-# Basic data processing (no pandas to avoid compilation issues)
-numpy==1.24.4
-yfinance==0.2.22
-
-# ML and predictions (pre-compiled versions)
-scikit-learn==1.3.2
-joblib==1.3.2
-
-# News and sentiment analysis
-beautifulsoup4==4.12.2
-feedparser==6.0.10
-textblob==0.17.1
-
-# HTTP requests
-aiohttp==3.9.1
+# HTTP requests only
 requests==2.31.0
 
-# Utilities
-python-dateutil==2.8.2
-pytz==2023.3
+# Basic text processing
+beautifulsoup4==4.12.2
+feedparser==6.0.10
 
-# Logging
-loguru==0.7.2
-
-# Environment management
+# Environment
 python-dotenv==1.0.0
 
-# CORS and security
+# CORS
 python-multipart==0.0.6
-
-# For production optimization
-gunicorn==21.2.0
