@@ -3,7 +3,7 @@ from fastapi.middleware.cors import CORSMiddleware
 import asyncio
 import json
 import logging
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 import os
 import random
 import time
@@ -29,6 +29,9 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+# WebSocket connections - GLOBAL DECLARATION
+websocket_connections = set()
+
 # Mock exchange rates data
 current_rates = {
     'USD/EUR': {
@@ -38,7 +41,7 @@ current_rates = {
         'high': 1.0870,
         'low': 1.0820,
         'volume': 1500000,
-        'timestamp': datetime.utcnow().isoformat(),
+        'timestamp': datetime.now(timezone.utc).isoformat(),
         'source': 'mock'
     },
     'USD/GBP': {
@@ -48,7 +51,7 @@ current_rates = {
         'high': 0.7850,
         'low': 0.7820,
         'volume': 1200000,
-        'timestamp': datetime.utcnow().isoformat(),
+        'timestamp': datetime.now(timezone.utc).isoformat(),
         'source': 'mock'
     },
     'USD/JPY': {
@@ -58,7 +61,7 @@ current_rates = {
         'high': 150.20,
         'low': 149.40,
         'volume': 2000000,
-        'timestamp': datetime.utcnow().isoformat(),
+        'timestamp': datetime.now(timezone.utc).isoformat(),
         'source': 'mock'
     },
     'EUR/GBP': {
@@ -68,7 +71,7 @@ current_rates = {
         'high': 0.8640,
         'low': 0.8580,
         'volume': 800000,
-        'timestamp': datetime.utcnow().isoformat(),
+        'timestamp': datetime.now(timezone.utc).isoformat(),
         'source': 'mock'
     }
 }
@@ -81,7 +84,7 @@ mock_news = [
         'description': 'The Federal Reserve decided to keep interest rates unchanged in their latest meeting.',
         'url': 'https://example.com/fed-policy',
         'source': 'Federal Reserve',
-        'published_at': datetime.utcnow().isoformat(),
+        'published_at': datetime.now(timezone.utc).isoformat(),
         'sentiment': {'score': 0.1, 'label': 'neutral'},
         'relevance': 0.8,
         'impact': 'medium'
@@ -92,7 +95,7 @@ mock_news = [
         'description': 'Recent economic indicators suggest sustained economic expansion.',
         'url': 'https://example.com/economic-growth',
         'source': 'Economic Report',
-        'published_at': (datetime.utcnow() - timedelta(hours=2)).isoformat(),
+        'published_at': (datetime.now(timezone.utc) - timedelta(hours=2)).isoformat(),
         'sentiment': {'score': 0.4, 'label': 'positive'},
         'relevance': 0.7,
         'impact': 'medium'
@@ -103,15 +106,12 @@ mock_news = [
         'description': 'Trading volumes have increased as markets react to recent policy announcements.',
         'url': 'https://example.com/market-volatility',
         'source': 'Market Analysis',
-        'published_at': (datetime.utcnow() - timedelta(hours=4)).isoformat(),
+        'published_at': (datetime.now(timezone.utc) - timedelta(hours=4)).isoformat(),
         'sentiment': {'score': -0.2, 'label': 'negative'},
         'relevance': 0.9,
         'impact': 'high'
     }
 ]
-
-# WebSocket connections
-websocket_connections = set()
 
 def update_mock_rates():
     """Update mock rates with small random changes"""
@@ -124,7 +124,7 @@ def update_mock_rates():
         data['rate'] = round(new_rate, 6)
         data['change'] = round(change, 6)
         data['change_percent'] = round((change / data['rate']) * 100, 3)
-        data['timestamp'] = datetime.utcnow().isoformat()
+        data['timestamp'] = datetime.now(timezone.utc).isoformat()
         
         # Update high/low occasionally
         if random.random() < 0.1:  # 10% chance
@@ -135,6 +135,8 @@ def update_mock_rates():
 
 async def rate_update_task():
     """Background task to update rates every 5 seconds"""
+    global websocket_connections  # Declare as global
+    
     while True:
         try:
             update_mock_rates()
@@ -143,12 +145,12 @@ async def rate_update_task():
             message = {
                 'type': 'rate_update',
                 'data': current_rates,
-                'timestamp': datetime.utcnow().isoformat()
+                'timestamp': datetime.now(timezone.utc).isoformat()
             }
             
             # Send to all connected clients
             disconnected = set()
-            for websocket in websocket_connections:
+            for websocket in websocket_connections.copy():  # Use copy to avoid modification during iteration
                 try:
                     await websocket.send_json(message)
                 except Exception:
@@ -180,7 +182,7 @@ async def health_check():
     """Health check endpoint"""
     return {
         "status": "healthy",
-        "timestamp": datetime.utcnow().isoformat(),
+        "timestamp": datetime.now(timezone.utc).isoformat(),
         "service": "exchange-rate-api",
         "version": "1.0.0"
     }
@@ -193,7 +195,17 @@ async def root():
         "version": "1.0.0",
         "docs": "/docs",
         "health": "/health",
-        "status": "running"
+        "status": "running",
+        "available_endpoints": [
+            "GET /health",
+            "GET /api/v1/rates/live",
+            "GET /api/v1/rates/{pair}/history",
+            "GET /api/v1/predictions/{pair}",
+            "GET /api/v1/predictions/performance",
+            "GET /api/v1/news/{pair}",
+            "GET /api/v1/news/{pair}/sentiment",
+            "WS /ws"
+        ]
     }
 
 @app.get("/api/v1/rates/live")
@@ -201,7 +213,7 @@ async def get_live_rates():
     """Get current exchange rates"""
     return {
         "rates": current_rates,
-        "timestamp": datetime.utcnow().isoformat(),
+        "timestamp": datetime.now(timezone.utc).isoformat(),
         "source": "mock_data"
     }
 
@@ -216,7 +228,7 @@ async def get_historical_rates(pair: str):
     history = []
     
     for i in range(24):  # 24 hours of data
-        time_point = datetime.utcnow() - timedelta(hours=23-i)
+        time_point = datetime.now(timezone.utc) - timedelta(hours=23-i)
         variation = random.uniform(-0.01, 0.01)
         rate = base_rate + variation
         
@@ -264,7 +276,7 @@ async def get_predictions(pair: str):
     return {
         "pair": pair,
         "predictions": predictions,
-        "generated_at": datetime.utcnow().isoformat(),
+        "generated_at": datetime.now(timezone.utc).isoformat(),
         "model": "ensemble_mock"
     }
 
@@ -277,7 +289,7 @@ async def get_model_performance():
         "mae": round(random.uniform(0.005, 0.015), 4),
         "directional_accuracy": round(random.uniform(0.70, 0.78), 3),
         "total_predictions": random.randint(5000, 10000),
-        "last_updated": datetime.utcnow().isoformat(),
+        "last_updated": datetime.now(timezone.utc).isoformat(),
         "model_version": "1.0.0"
     }
 
@@ -294,7 +306,7 @@ async def get_news(pair: str):
             "neutral_count": sum(1 for a in mock_news if -0.1 <= a['sentiment']['score'] <= 0.1),
             "negative_count": sum(1 for a in mock_news if a['sentiment']['score'] < -0.1)
         },
-        "last_updated": datetime.utcnow().isoformat()
+        "last_updated": datetime.now(timezone.utc).isoformat()
     }
 
 @app.get("/api/v1/news/{pair}/sentiment")
@@ -312,12 +324,14 @@ async def get_sentiment_analysis(pair: str):
         },
         "confidence": round(random.uniform(0.75, 0.90), 2),
         "article_count": random.randint(15, 35),
-        "last_updated": datetime.utcnow().isoformat()
+        "last_updated": datetime.now(timezone.utc).isoformat()
     }
 
 @app.websocket("/ws")
 async def websocket_endpoint(websocket: WebSocket):
     """WebSocket endpoint for real-time updates"""
+    global websocket_connections
+    
     await websocket.accept()
     websocket_connections.add(websocket)
     
@@ -327,7 +341,7 @@ async def websocket_endpoint(websocket: WebSocket):
             "type": "initial_data",
             "data": {
                 "rates": current_rates,
-                "timestamp": datetime.utcnow().isoformat()
+                "timestamp": datetime.now(timezone.utc).isoformat()
             }
         })
         
@@ -348,7 +362,7 @@ async def websocket_endpoint(websocket: WebSocket):
                 elif data.get("type") == "ping":
                     await websocket.send_json({
                         "type": "pong",
-                        "timestamp": datetime.utcnow().isoformat()
+                        "timestamp": datetime.now(timezone.utc).isoformat()
                     })
                 
             except WebSocketDisconnect:
