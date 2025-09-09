@@ -1,22 +1,13 @@
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException
+from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
 import asyncio
 import json
 import logging
 from datetime import datetime, timedelta
 import os
-from typing import Dict, List, Optional, Any
-import uvicorn
-
-# Simple data collector without pandas
-import yfinance as yf
-import aiohttp
-from bs4 import BeautifulSoup
-import feedparser
-from textblob import TextBlob
-import motor.motor_asyncio
 import random
+import time
+import uvicorn
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -26,182 +17,127 @@ logger = logging.getLogger(__name__)
 app = FastAPI(
     title="Exchange Rate Forecasting API",
     description="Real-time exchange rate prediction with news sentiment analysis",
-    version="1.0.0",
-    docs_url="/api/docs",
-    redoc_url="/api/redoc"
+    version="1.0.0"
 )
 
 # CORS middleware
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[
-        "https://your-vercel-app.vercel.app",
-        "https://*.vercel.app", 
-        "http://localhost:3000",
-        "http://localhost:5173",
-        "*"  # For development - remove in production
-    ],
+    allow_origins=["*"],  # Allow all origins for demo
     allow_credentials=True,
-    allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+    allow_methods=["*"],
     allow_headers=["*"],
 )
 
-# Global state
+# Mock exchange rates data
 current_rates = {
-    'USD/EUR': {'rate': 1.0847, 'change': 0.0023, 'change_percent': 0.21, 'timestamp': datetime.utcnow().isoformat()},
-    'USD/GBP': {'rate': 0.7834, 'change': -0.0012, 'change_percent': -0.15, 'timestamp': datetime.utcnow().isoformat()},
-    'USD/JPY': {'rate': 149.85, 'change': 0.45, 'change_percent': 0.30, 'timestamp': datetime.utcnow().isoformat()},
-    'EUR/GBP': {'rate': 0.8612, 'change': 0.0034, 'change_percent': 0.40, 'timestamp': datetime.utcnow().isoformat()},
+    'USD/EUR': {
+        'rate': 1.0847,
+        'change': 0.0023,
+        'change_percent': 0.21,
+        'high': 1.0870,
+        'low': 1.0820,
+        'volume': 1500000,
+        'timestamp': datetime.utcnow().isoformat(),
+        'source': 'mock'
+    },
+    'USD/GBP': {
+        'rate': 0.7834,
+        'change': -0.0012,
+        'change_percent': -0.15,
+        'high': 0.7850,
+        'low': 0.7820,
+        'volume': 1200000,
+        'timestamp': datetime.utcnow().isoformat(),
+        'source': 'mock'
+    },
+    'USD/JPY': {
+        'rate': 149.85,
+        'change': 0.45,
+        'change_percent': 0.30,
+        'high': 150.20,
+        'low': 149.40,
+        'volume': 2000000,
+        'timestamp': datetime.utcnow().isoformat(),
+        'source': 'mock'
+    },
+    'EUR/GBP': {
+        'rate': 0.8612,
+        'change': 0.0034,
+        'change_percent': 0.40,
+        'high': 0.8640,
+        'low': 0.8580,
+        'volume': 800000,
+        'timestamp': datetime.utcnow().isoformat(),
+        'source': 'mock'
+    }
 }
 
-# Simple MongoDB client
-mongodb_client = None
-db = None
+# Mock news data
+mock_news = [
+    {
+        'id': 1,
+        'title': 'Federal Reserve Maintains Current Policy Stance',
+        'description': 'The Federal Reserve decided to keep interest rates unchanged in their latest meeting.',
+        'url': 'https://example.com/fed-policy',
+        'source': 'Federal Reserve',
+        'published_at': datetime.utcnow().isoformat(),
+        'sentiment': {'score': 0.1, 'label': 'neutral'},
+        'relevance': 0.8,
+        'impact': 'medium'
+    },
+    {
+        'id': 2,
+        'title': 'Economic Data Shows Continued Growth',
+        'description': 'Recent economic indicators suggest sustained economic expansion.',
+        'url': 'https://example.com/economic-growth',
+        'source': 'Economic Report',
+        'published_at': (datetime.utcnow() - timedelta(hours=2)).isoformat(),
+        'sentiment': {'score': 0.4, 'label': 'positive'},
+        'relevance': 0.7,
+        'impact': 'medium'
+    },
+    {
+        'id': 3,
+        'title': 'Currency Markets Show Increased Volatility',
+        'description': 'Trading volumes have increased as markets react to recent policy announcements.',
+        'url': 'https://example.com/market-volatility',
+        'source': 'Market Analysis',
+        'published_at': (datetime.utcnow() - timedelta(hours=4)).isoformat(),
+        'sentiment': {'score': -0.2, 'label': 'negative'},
+        'relevance': 0.9,
+        'impact': 'high'
+    }
+]
 
 # WebSocket connections
 websocket_connections = set()
 
-@app.on_event("startup")
-async def startup_event():
-    """Initialize services on startup"""
-    global mongodb_client, db
-    
-    logger.info("🚀 Starting Exchange Rate Forecasting API...")
-    
-    # Initialize MongoDB (optional - will work without it)
-    try:
-        mongodb_uri = os.getenv("MONGODB_URI")
-        if mongodb_uri:
-            mongodb_client = motor.motor_asyncio.AsyncIOMotorClient(mongodb_uri)
-            db = mongodb_client[os.getenv("MONGODB_DATABASE", "exchange_rate_db")]
-            logger.info("✅ MongoDB connected")
-        else:
-            logger.info("ℹ️  Running without MongoDB")
-    except Exception as e:
-        logger.warning(f"MongoDB connection failed: {e}. Running without database.")
-    
-    # Start background tasks
-    asyncio.create_task(update_rates_task())
-    asyncio.create_task(collect_news_task())
-    
-    logger.info("✅ All services initialized successfully")
-
-@app.on_event("shutdown")
-async def shutdown_event():
-    """Cleanup on shutdown"""
-    logger.info("🔄 Shutting down services...")
-    if mongodb_client:
-        mongodb_client.close()
-    logger.info("✅ Shutdown complete")
-
-# Simple data collection functions
-def get_yahoo_rates(pairs: List[str]) -> Dict[str, Any]:
-    """Get exchange rates from Yahoo Finance"""
-    rates = {}
-    
-    for pair in pairs:
-        try:
-            base, quote = pair.split('/')
-            symbol = f"{base}{quote}=X"
-            
-            ticker = yf.Ticker(symbol)
-            info = ticker.info
-            
-            current_rate = info.get('regularMarketPrice') or info.get('bid', 0)
-            prev_rate = info.get('regularMarketPreviousClose', current_rate)
-            
-            if current_rate == 0:
-                # Fallback
-                current_rate = current_rates.get(pair, {}).get('rate', 1.0)
-                prev_rate = current_rate - 0.001
-            
-            change = current_rate - prev_rate
-            change_percent = (change / prev_rate) * 100 if prev_rate != 0 else 0
-            
-            rates[pair] = {
-                'rate': round(float(current_rate), 6),
-                'change': round(float(change), 6),
-                'change_percent': round(float(change_percent), 3),
-                'high': round(float(info.get('dayHigh', current_rate)), 6),
-                'low': round(float(info.get('dayLow', current_rate)), 6),
-                'volume': info.get('volume', 0),
-                'timestamp': datetime.utcnow().isoformat(),
-                'source': 'yahoo_finance'
-            }
-            
-        except Exception as e:
-            logger.error(f"Error fetching {pair}: {e}")
-            # Use fallback data
-            base_rate = current_rates.get(pair, {}).get('rate', 1.0)
-            change = random.uniform(-0.001, 0.001)
-            rates[pair] = {
-                'rate': round(base_rate + change, 6),
-                'change': round(change, 6),
-                'change_percent': round((change / base_rate) * 100, 3),
-                'high': round(base_rate + abs(change), 6),
-                'low': round(base_rate - abs(change), 6),
-                'volume': 1000000,
-                'timestamp': datetime.utcnow().isoformat(),
-                'source': 'fallback'
-            }
-    
-    return rates
-
-def get_fed_news() -> List[Dict[str, Any]]:
-    """Get Federal Reserve news"""
-    articles = []
-    
-    try:
-        feed = feedparser.parse("https://www.federalreserve.gov/feeds/press_all.xml")
+def update_mock_rates():
+    """Update mock rates with small random changes"""
+    for pair, data in current_rates.items():
+        # Small random change
+        change = random.uniform(-0.002, 0.002)
+        new_rate = data['rate'] + change
         
-        for entry in feed.entries[:5]:
-            # Simple sentiment analysis
-            text = f"{entry.title} {entry.get('summary', '')}"
-            blob = TextBlob(text)
-            sentiment_score = blob.sentiment.polarity
-            
-            articles.append({
-                'id': hash(entry.link) % 1000000,
-                'title': entry.title,
-                'description': entry.get('summary', ''),
-                'url': entry.link,
-                'source': 'Federal Reserve',
-                'published_at': entry.get('published', datetime.utcnow().isoformat()),
-                'sentiment': {
-                    'score': round(sentiment_score, 3),
-                    'label': 'positive' if sentiment_score > 0.1 else 'negative' if sentiment_score < -0.1 else 'neutral'
-                },
-                'relevance': 0.8,
-                'impact': 'high'
-            })
-    
-    except Exception as e:
-        logger.error(f"Error fetching Fed news: {e}")
-    
-    return articles
+        # Update data
+        data['rate'] = round(new_rate, 6)
+        data['change'] = round(change, 6)
+        data['change_percent'] = round((change / data['rate']) * 100, 3)
+        data['timestamp'] = datetime.utcnow().isoformat()
+        
+        # Update high/low occasionally
+        if random.random() < 0.1:  # 10% chance
+            if new_rate > data['high']:
+                data['high'] = new_rate
+            elif new_rate < data['low']:
+                data['low'] = new_rate
 
-# Background tasks
-async def update_rates_task():
-    """Update exchange rates every 30 seconds"""
+async def rate_update_task():
+    """Background task to update rates every 5 seconds"""
     while True:
         try:
-            pairs = ['USD/EUR', 'USD/GBP', 'USD/JPY', 'EUR/GBP']
-            new_rates = get_yahoo_rates(pairs)
-            
-            # Update global rates
-            current_rates.update(new_rates)
-            
-            # Store in MongoDB if available
-            if db:
-                try:
-                    for pair, rate_data in new_rates.items():
-                        await db.exchange_rates.insert_one({
-                            'pair': pair,
-                            **rate_data,
-                            'created_at': datetime.utcnow()
-                        })
-                except Exception as e:
-                    logger.error(f"Database error: {e}")
+            update_mock_rates()
             
             # Broadcast to WebSocket clients
             message = {
@@ -221,52 +157,32 @@ async def update_rates_task():
             # Remove disconnected clients
             websocket_connections -= disconnected
             
-            logger.info(f"✅ Updated rates for {len(new_rates)} pairs")
+            logger.info(f"Updated rates and broadcast to {len(websocket_connections)} clients")
             
         except Exception as e:
             logger.error(f"Error in rate update task: {e}")
         
-        await asyncio.sleep(30)
+        await asyncio.sleep(5)  # Update every 5 seconds
 
-async def collect_news_task():
-    """Collect news every 5 minutes"""
-    while True:
-        try:
-            articles = get_fed_news()
-            
-            # Store in MongoDB if available
-            if db and articles:
-                try:
-                    for article in articles:
-                        # Try to insert, ignore duplicates
-                        try:
-                            await db.news_articles.insert_one({
-                                **article,
-                                'currency_pair': 'USD/EUR',  # Default relevance
-                                'scraped_at': datetime.utcnow()
-                            })
-                        except Exception:
-                            pass  # Ignore duplicate errors
-                except Exception as e:
-                    logger.error(f"Database error storing news: {e}")
-            
-            logger.info(f"📰 Collected {len(articles)} news articles")
-            
-        except Exception as e:
-            logger.error(f"Error in news collection task: {e}")
-        
-        await asyncio.sleep(300)  # 5 minutes
+@app.on_event("startup")
+async def startup_event():
+    """Start background tasks"""
+    logger.info("Starting Exchange Rate Forecasting API...")
+    
+    # Start rate update task
+    asyncio.create_task(rate_update_task())
+    
+    logger.info("All services initialized successfully")
 
 # API Routes
 @app.get("/health")
 async def health_check():
-    """Health check"""
+    """Health check endpoint"""
     return {
         "status": "healthy",
         "timestamp": datetime.utcnow().isoformat(),
         "service": "exchange-rate-api",
-        "version": "1.0.0",
-        "database": "connected" if db else "not_connected"
+        "version": "1.0.0"
     }
 
 @app.get("/")
@@ -275,67 +191,72 @@ async def root():
     return {
         "message": "Exchange Rate Forecasting API",
         "version": "1.0.0",
-        "docs": "/api/docs",
-        "health": "/health"
+        "docs": "/docs",
+        "health": "/health",
+        "status": "running"
     }
 
 @app.get("/api/v1/rates/live")
 async def get_live_rates():
-    """Get live exchange rates"""
+    """Get current exchange rates"""
     return {
         "rates": current_rates,
         "timestamp": datetime.utcnow().isoformat(),
-        "source": "yahoo_finance"
+        "source": "mock_data"
     }
 
 @app.get("/api/v1/rates/{pair}/history")
 async def get_historical_rates(pair: str):
     """Get historical rates for a currency pair"""
-    try:
-        # Generate mock historical data
-        base_rate = current_rates.get(pair, {}).get('rate', 1.0)
-        history = []
+    if pair not in current_rates:
+        return {"error": "Currency pair not found", "available_pairs": list(current_rates.keys())}
+    
+    # Generate mock historical data
+    base_rate = current_rates[pair]['rate']
+    history = []
+    
+    for i in range(24):  # 24 hours of data
+        time_point = datetime.utcnow() - timedelta(hours=23-i)
+        variation = random.uniform(-0.01, 0.01)
+        rate = base_rate + variation
         
-        for i in range(24):
-            time_point = datetime.utcnow() - timedelta(hours=23-i)
-            variation = random.uniform(-0.01, 0.01)
-            rate = base_rate + variation
-            
-            history.append({
-                'timestamp': time_point.isoformat(),
-                'rate': round(rate, 6),
-                'volume': random.randint(500000, 2000000)
-            })
-        
-        return {
-            "pair": pair,
-            "data": history,
-            "period": "24h"
-        }
-        
-    except Exception as e:
-        logger.error(f"Error getting historical rates: {e}")
-        raise HTTPException(status_code=500, detail="Error fetching historical data")
+        history.append({
+            'timestamp': time_point.isoformat(),
+            'rate': round(rate, 6),
+            'volume': random.randint(500000, 2000000),
+            'high': round(rate + abs(variation) * 0.5, 6),
+            'low': round(rate - abs(variation) * 0.5, 6)
+        })
+    
+    return {
+        "pair": pair,
+        "data": history,
+        "period": "24h",
+        "count": len(history)
+    }
 
 @app.get("/api/v1/predictions/{pair}")
 async def get_predictions(pair: str):
     """Get AI predictions for currency pair"""
-    current_rate = current_rates.get(pair, {}).get('rate', 1.0)
+    if pair not in current_rates:
+        return {"error": "Currency pair not found", "available_pairs": list(current_rates.keys())}
+    
+    current_rate = current_rates[pair]['rate']
     
     predictions = {
         '1h': {
             'rate': round(current_rate + random.uniform(-0.001, 0.001), 6),
-            'confidence': round(random.uniform(0.8, 0.95), 2),
+            'confidence': round(random.uniform(0.80, 0.95), 2),
             'direction': 'up' if random.random() > 0.5 else 'down'
         },
         '24h': {
             'rate': round(current_rate + random.uniform(-0.01, 0.01), 6),
-            'confidence': round(random.uniform(0.7, 0.85), 2),
+            'confidence': round(random.uniform(0.70, 0.85), 2),
             'direction': 'up' if random.random() > 0.5 else 'down'
         },
         '168h': {
             'rate': round(current_rate + random.uniform(-0.03, 0.03), 6),
-            'confidence': round(random.uniform(0.6, 0.75), 2),
+            'confidence': round(random.uniform(0.60, 0.75), 2),
             'direction': 'up' if random.random() > 0.5 else 'down'
         }
     }
@@ -344,7 +265,7 @@ async def get_predictions(pair: str):
         "pair": pair,
         "predictions": predictions,
         "generated_at": datetime.utcnow().isoformat(),
-        "model": "ensemble"
+        "model": "ensemble_mock"
     }
 
 @app.get("/api/v1/predictions/performance")
@@ -353,50 +274,27 @@ async def get_model_performance():
     return {
         "accuracy": round(random.uniform(0.82, 0.87), 3),
         "mse": round(random.uniform(0.0001, 0.0003), 6),
-        "directional_accuracy": round(random.uniform(0.70, 0.75), 3),
-        "last_updated": datetime.utcnow().isoformat()
+        "mae": round(random.uniform(0.005, 0.015), 4),
+        "directional_accuracy": round(random.uniform(0.70, 0.78), 3),
+        "total_predictions": random.randint(5000, 10000),
+        "last_updated": datetime.utcnow().isoformat(),
+        "model_version": "1.0.0"
     }
 
 @app.get("/api/v1/news/{pair}")
 async def get_news(pair: str):
-    """Get news for currency pair"""
-    articles = get_fed_news()
-    
-    # Add some mock articles if no real ones
-    if not articles:
-        articles = [
-            {
-                'id': 1,
-                'title': 'Federal Reserve Maintains Current Policy Stance',
-                'description': 'The Federal Reserve decided to keep interest rates unchanged in their latest meeting.',
-                'source': 'Federal Reserve',
-                'published_at': datetime.utcnow().isoformat(),
-                'sentiment': {'score': 0.1, 'label': 'neutral'},
-                'relevance': 0.8,
-                'impact': 'medium'
-            },
-            {
-                'id': 2,
-                'title': 'Economic Data Shows Continued Growth',
-                'description': 'Recent economic indicators suggest sustained economic expansion.',
-                'source': 'Economic Report',
-                'published_at': (datetime.utcnow() - timedelta(hours=2)).isoformat(),
-                'sentiment': {'score': 0.4, 'label': 'positive'},
-                'relevance': 0.7,
-                'impact': 'medium'
-            }
-        ]
-    
+    """Get news articles for currency pair"""
     return {
         "pair": pair,
-        "articles": articles,
-        "total_count": len(articles),
+        "articles": mock_news,
+        "total_count": len(mock_news),
         "sentiment_summary": {
-            "overall_sentiment": 0.25,
-            "positive_count": sum(1 for a in articles if a['sentiment']['score'] > 0.1),
-            "neutral_count": sum(1 for a in articles if -0.1 <= a['sentiment']['score'] <= 0.1),
-            "negative_count": sum(1 for a in articles if a['sentiment']['score'] < -0.1)
-        }
+            "overall_sentiment": round(sum(article['sentiment']['score'] for article in mock_news) / len(mock_news), 3),
+            "positive_count": sum(1 for a in mock_news if a['sentiment']['score'] > 0.1),
+            "neutral_count": sum(1 for a in mock_news if -0.1 <= a['sentiment']['score'] <= 0.1),
+            "negative_count": sum(1 for a in mock_news if a['sentiment']['score'] < -0.1)
+        },
+        "last_updated": datetime.utcnow().isoformat()
     }
 
 @app.get("/api/v1/news/{pair}/sentiment")
@@ -405,19 +303,18 @@ async def get_sentiment_analysis(pair: str):
     return {
         "pair": pair,
         "period": "24h",
-        "overall_sentiment": round(random.uniform(0.2, 0.4), 2),
+        "overall_sentiment": round(random.uniform(0.15, 0.45), 2),
         "sentiment_trend": random.choice(['improving', 'declining', 'stable']),
         "distribution": {
-            "positive": round(random.uniform(0.4, 0.5), 2),
-            "neutral": round(random.uniform(0.3, 0.4), 2),
-            "negative": round(random.uniform(0.1, 0.3), 2)
+            "positive": round(random.uniform(0.35, 0.50), 2),
+            "neutral": round(random.uniform(0.25, 0.40), 2),
+            "negative": round(random.uniform(0.10, 0.35), 2)
         },
-        "confidence": round(random.uniform(0.8, 0.9), 2),
-        "article_count": random.randint(15, 30),
+        "confidence": round(random.uniform(0.75, 0.90), 2),
+        "article_count": random.randint(15, 35),
         "last_updated": datetime.utcnow().isoformat()
     }
 
-# WebSocket endpoint
 @app.websocket("/ws")
 async def websocket_endpoint(websocket: WebSocket):
     """WebSocket endpoint for real-time updates"""
@@ -434,7 +331,7 @@ async def websocket_endpoint(websocket: WebSocket):
             }
         })
         
-        # Keep connection alive
+        # Keep connection alive and handle messages
         while True:
             try:
                 data = await websocket.receive_json()
@@ -448,6 +345,12 @@ async def websocket_endpoint(websocket: WebSocket):
                             "data": current_rates[pair]
                         })
                 
+                elif data.get("type") == "ping":
+                    await websocket.send_json({
+                        "type": "pong",
+                        "timestamp": datetime.utcnow().isoformat()
+                    })
+                
             except WebSocketDisconnect:
                 break
             except Exception as e:
@@ -460,8 +363,8 @@ async def websocket_endpoint(websocket: WebSocket):
 if __name__ == "__main__":
     port = int(os.getenv("PORT", 8000))
     uvicorn.run(
-        "app.main:app",
+        app,
         host="0.0.0.0",
         port=port,
-        reload=False
+        log_level="info"
     )
